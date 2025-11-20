@@ -11,18 +11,30 @@ import {
   Copy,
   ArrowDownCircle,
   Share2,
-  RefreshCw
+  RefreshCw,
+  Save
 } from 'lucide-react';
 import { Task, Priority, SISTERS, SisterName } from './types';
 import Dashboard from './components/Dashboard';
 import { parseSmartInput, getMotivationalMessage } from './services/geminiService';
 
-// --- Helper: Safe ID Generator ---
+// --- Helper: Robust Safe ID Generator ---
+// Uses a counter and timestamp to ensure uniqueness even if crypto is unavailable or during fast loops
+let idCounter = 0;
 const generateId = () => {
+  const timestamp = Date.now().toString(36);
+  const randomPart = Math.random().toString(36).substring(2, 8);
+  idCounter = (idCounter + 1) % 10000;
+  
+  // Try native UUID if available and secure
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return crypto.randomUUID();
+    try {
+      return crypto.randomUUID();
+    } catch (e) {
+      // Fallback if insecure context
+    }
   }
-  return Date.now().toString(36) + Math.random().toString(36).substring(2);
+  return `${timestamp}-${randomPart}-${idCounter}`;
 };
 
 // --- Helper Components ---
@@ -78,9 +90,19 @@ const App: React.FC = () => {
   const [tasks, setTasks] = useState<Task[]>(() => {
     try {
       const saved = localStorage.getItem('sisterSyncTasks');
-      return saved ? JSON.parse(saved) : [];
+      if (!saved) return [];
+      
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) return [];
+
+      // Data migration: Ensure all tasks have IDs and valid properties
+      return parsed.map(t => ({
+        ...t,
+        id: t.id || generateId(),
+        createdAt: t.createdAt || Date.now()
+      }));
     } catch (e) {
-      console.error("Failed to load tasks", e);
+      console.error("Failed to load tasks from storage", e);
       return [];
     }
   });
@@ -107,10 +129,26 @@ const App: React.FC = () => {
   const [syncMessage, setSyncMessage] = useState<{text: string, type: 'success' | 'error'} | null>(null);
 
   const [dailyQuote, setDailyQuote] = useState<string>("");
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved');
 
   // --- Effects ---
   useEffect(() => {
-    localStorage.setItem('sisterSyncTasks', JSON.stringify(tasks));
+    const saveTasks = () => {
+      try {
+        setSaveStatus('saving');
+        localStorage.setItem('sisterSyncTasks', JSON.stringify(tasks));
+        // Small delay to show "saved" state if we had a UI indicator
+        setTimeout(() => setSaveStatus('saved'), 500);
+      } catch (e) {
+        console.error("Failed to save tasks to localStorage", e);
+        setSaveStatus('error');
+        alert("Warning: Could not save tasks. Your browser storage might be full or disabled.");
+      }
+    };
+
+    // Debounce saving slightly to prevent thrashing
+    const timeoutId = setTimeout(saveTasks, 500);
+    return () => clearTimeout(timeoutId);
   }, [tasks]);
 
   useEffect(() => {
@@ -139,7 +177,7 @@ const App: React.FC = () => {
 
       if (result && result.tasks && result.tasks.length > 0) {
         const newTasks = result.tasks.map(t => ({
-          id: generateId(),
+          id: generateId(), // Uses the robust ID generator
           title: t.title,
           description: t.description,
           assignee: t.assignee,
@@ -220,19 +258,20 @@ const App: React.FC = () => {
       const importedData = JSON.parse(jsonStr);
       
       if (Array.isArray(importedData)) {
-        // Validate rough shape
-        const valid = importedData.every(t => t.id && t.title && t.assignee);
-        if (valid) {
-          setTasks(importedData);
-          setSyncMessage({ text: "Tasks updated successfully!", type: 'success' });
-          setImportCode('');
-          setTimeout(() => {
-            setSyncMessage(null);
-            setIsSettingsOpen(false);
-          }, 1500);
-        } else {
-          throw new Error("Invalid data format");
-        }
+        // Validate and Fix data
+        const validTasks = importedData.map((t: any) => ({
+           ...t,
+           id: t.id || generateId(), // Ensure ID exists
+           isCompleted: !!t.isCompleted // Ensure boolean
+        }));
+
+        setTasks(validTasks);
+        setSyncMessage({ text: "Tasks updated successfully!", type: 'success' });
+        setImportCode('');
+        setTimeout(() => {
+          setSyncMessage(null);
+          setIsSettingsOpen(false);
+        }, 1500);
       } else {
         throw new Error("Not a list");
       }
@@ -283,10 +322,11 @@ const App: React.FC = () => {
              
              <button
                onClick={() => setIsSettingsOpen(true)}
-               className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all"
+               className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-full transition-all relative"
                title="Sync Settings"
              >
                <Settings className="w-5 h-5" />
+               {saveStatus === 'error' && <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />}
              </button>
 
              <button 
@@ -654,6 +694,14 @@ const App: React.FC = () => {
                   Update My List
                 </button>
               </div>
+
+               {/* Debug/Reset Section */}
+              <div className="pt-4 border-t border-slate-100 text-center">
+                <p className="text-xs text-slate-400 mb-2">
+                   Status: {saveStatus === 'saved' ? 'All changes saved' : saveStatus === 'saving' ? 'Saving...' : 'Storage Error'}
+                </p>
+              </div>
+
             </div>
           </div>
         </div>
