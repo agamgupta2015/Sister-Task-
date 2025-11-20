@@ -1,0 +1,5 @@
+{
+  "name": " Tasks",
+  "description": "A collaborative-style todo list app designed for three sisters to track tasks, view progress visualizations, and use AI to organize their day.",
+  "requestFramePermissions": []
+}
